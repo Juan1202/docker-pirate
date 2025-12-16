@@ -6,7 +6,7 @@
   "scripts": {
     "node": "node app.js",
     "nodemon": "nodemon app.js",
-    "test": "mocha --exit",
+    "test": "mocha --exit --timeout 10000",
     "coverage": "nyc --reporter=lcov npm run test",
     "sonar": "node sonar-project.js"
   },
@@ -22,16 +22,16 @@
   "dependencies": {
     "express": "^4.19.2",
     "morgan": "^1.10.0",
-    "mysql": "^3.9.7",
+    "mysql2": "^3.9.7",
     "nodemon": "^3.1.4",
     "normalize-url": "^8.0.0",
     "sonarqube-scanner": "^3.1.0"
   },
   "devDependencies": {
-    "chai": "^5.1.1",
+    "chai": "^4.3.10",
     "chai-http": "^4.4.0",
     "mocha": "^10.4.0",
     "nyc": "^15.1.0",
-    "sinon": "^10.0.2"
+    "sinon": "^17.0.2"
   }
 }
