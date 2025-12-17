@@ -12,11 +12,12 @@ pipeline {
     agent any
 
     tools {
-        nodejs 'nodejs' // Debe estar configurado en 'Global Tool Configuration'
+        // Asegúrate de que en 'Global Tool Configuration' el nombre sea 'nodejs'
+        nodejs 'nodejs' 
     }
 
     environment {
-        // Ajustado según image_92e479.png: La app está en express-mysql/app
+        // Ruta de la app según tu estructura en image_92e479.png
         PROJECT_ROOT = 'express-mysql/app'
         EMAIL_ADDRESS = 'san99tiagodevsecops@gmail.com'
         REGISTRY = 'juan1202/docker-pirate-express'
@@ -25,13 +26,13 @@ pipeline {
     stages {
         stage('Hello') {
             steps {
-                echo 'Iniciando Pipeline para rama feature'
+                echo 'Iniciando Pipeline corregido con autenticación por Token'
             }
         }
 
         stage('Checkout') {
             steps {
-                // CORRECCIÓN: Se apunta a tu rama de feature y se añade Shallow Clone para evitar error 128
+                // Mantenemos Shallow Clone para evitar el error de red previo
                 checkout([$class: 'GitSCM', 
                     branches: [[name: '*/feature/configuracion-inicial-jenkins']], 
                     extensions: [[$class: 'CloneOption', depth: 1, shallow: true, timeout: 30]], 
@@ -42,7 +43,6 @@ pipeline {
 
         stage('Install dependencies') {
             steps {
-                // Navega a la carpeta de la app antes de instalar
                 sh "cd ${PROJECT_ROOT} && npm install"
             }
         }
@@ -64,14 +64,18 @@ pipeline {
                 scannerHome = tool 'sonar-scanner'
             }
             steps {
-                withSonarQubeEnv('sonarqube') {
-                    sh "${scannerHome}/bin/sonar-scanner \
-                        -Dsonar.projectKey=SimpleExpressExample:Test \
-                        -Dsonar.projectName=SimpleExpressExample \
-                        -Dsonar.projectVersion=0.0.${BUILD_NUMBER} \
-                        -Dsonar.sources=${PROJECT_ROOT}/app.js,${PROJECT_ROOT}/config/db.config.js,${PROJECT_ROOT}/routes/developers.js \
-                        -Dsonar.tests=${PROJECT_ROOT}/test \
-                        -Dsonar.javascript.lcov.reportPaths=${PROJECT_ROOT}/coverage/lcov.info"
+                // CORRECCIÓN: Usamos el ID 'sonar-token' que creaste en Credentials -> System -> Global
+                withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                    withSonarQubeEnv('sonarqube') {
+                        sh "${scannerHome}/bin/sonar-scanner \
+                            -Dsonar.projectKey=SimpleExpressExample:Test \
+                            -Dsonar.projectName=SimpleExpressExample \
+                            -Dsonar.projectVersion=0.0.${BUILD_NUMBER} \
+                            -Dsonar.sources=${PROJECT_ROOT}/app.js,${PROJECT_ROOT}/config/db.config.js,${PROJECT_ROOT}/routes/developers.js \
+                            -Dsonar.tests=${PROJECT_ROOT}/test \
+                            -Dsonar.login=${SONAR_TOKEN} \
+                            -Dsonar.javascript.lcov.reportPaths=${PROJECT_ROOT}/coverage/lcov.info"
+                    }
                 }
                 timeout(time: 5, unit: 'MINUTES') {
                     script {
@@ -86,14 +90,13 @@ pipeline {
 
         stage('Build docker-image') {
             steps {
-                // Se construye desde la carpeta donde está el Dockerfile (express-mysql/app)
                 sh "cd ${PROJECT_ROOT} && docker build -t ${REGISTRY}:${BUILD_NUMBER} ."
             }
         }
 
         stage('Deploy docker-image') {
             steps {
-                // Asegúrate de tener configuradas las credenciales de DockerHub en Jenkins
+                // Nota: Requiere que crees una credencial tipo 'Username with password' con ID 'dockerhub-creds'
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', passwordVariable: 'DOCKER_PWD', usernameVariable: 'DOCKER_USER')]) {
                     sh "echo \$DOCKER_PWD | docker login -u \$DOCKER_USER --password-stdin"
                     sh "docker push ${REGISTRY}:${BUILD_NUMBER}"
