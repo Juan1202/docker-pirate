@@ -23,7 +23,7 @@ module.exports = app;
 
 // Solo inicia el servidor si el archivo se ejecuta directamente (no por los tests)
 if (require.main === module) {
-  const port = process.env.PORT || 4000;
+  const port = process.env.PORT || 3000;
   app.listen(port, () => {
     console.log(`Listening on port ${port}`);
   });
