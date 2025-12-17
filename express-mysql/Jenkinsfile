@@ -1,23 +1,11 @@
-// Función para validar el Quality Gate de SonarQube
-def qualityGateValidation(qg) {
-    if (qg.status != 'OK') {
-        echo "Quality Gate fallido: ${qg.status}"
-        return true
-    }
-    echo "Quality Gate aprobado"
-    return false
-}
-
 pipeline {
     agent any
 
     tools {
-        // Asegúrate de que en 'Global Tool Configuration' el nombre sea 'nodejs'
         nodejs 'nodejs' 
     }
 
     environment {
-        // Ruta de la app según tu estructura en image_92e479.png
         PROJECT_ROOT = 'express-mysql/app'
         EMAIL_ADDRESS = 'san99tiagodevsecops@gmail.com'
         REGISTRY = 'juan1202/docker-pirate-express'
@@ -26,13 +14,12 @@ pipeline {
     stages {
         stage('Hello') {
             steps {
-                echo 'Iniciando Pipeline corregido con autenticación por Token'
+                echo 'Iniciando Pipeline Final - Fase Docker'
             }
         }
 
         stage('Checkout') {
             steps {
-                // Mantenemos Shallow Clone para evitar el error de red previo
                 checkout([$class: 'GitSCM', 
                     branches: [[name: '*/feature/configuracion-inicial-jenkins']], 
                     extensions: [[$class: 'CloneOption', depth: 1, shallow: true, timeout: 30]], 
@@ -47,26 +34,18 @@ pipeline {
             }
         }
 
-        stage('Unit tests') {
+        stage('Unit tests & Coverage') {
             steps {
                 sh "cd ${PROJECT_ROOT} && npm run test"
-            }
-        }
-
-        stage('Generate coverage report') {
-            steps {
                 sh "cd ${PROJECT_ROOT} && npm run coverage"
             }
         }
 
         stage('SonarQube Scan') {
-            environment {
-                scannerHome = tool 'sonar-scanner'
-            }
             steps {
-                // CORRECCIÓN: Usamos el ID 'sonar-token' que creaste en Credentials -> System -> Global
                 withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
                     withSonarQubeEnv('sonarqube') {
+                        def scannerHome = tool 'sonar-scanner'
                         sh "${scannerHome}/bin/sonar-scanner \
                             -Dsonar.projectKey=SimpleExpressExample:Test \
                             -Dsonar.projectName=SimpleExpressExample \
@@ -78,25 +57,22 @@ pipeline {
                     }
                 }
                 timeout(time: 5, unit: 'MINUTES') {
-                    script {
-                        def qg = waitForQualityGate()
-                        if (qualityGateValidation(qg)) {
-                            error "Pipeline abortado por fallas en Quality Gate"
-                        }
-                    }
+                    // Si el Webhook está bien configurado, esto pasará a verde
+                    waitForQualityGate abortPipeline: true
                 }
             }
         }
 
         stage('Build docker-image') {
             steps {
+                // Se usa sudo si Jenkins no está en el grupo docker
                 sh "cd ${PROJECT_ROOT} && docker build -t ${REGISTRY}:${BUILD_NUMBER} ."
             }
         }
 
         stage('Deploy docker-image') {
             steps {
-                // Nota: Requiere que crees una credencial tipo 'Username with password' con ID 'dockerhub-creds'
+                // Asegúrate de crear esta credencial 'Username with password' con ID 'dockerhub-creds'
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', passwordVariable: 'DOCKER_PWD', usernameVariable: 'DOCKER_USER')]) {
                     sh "echo \$DOCKER_PWD | docker login -u \$DOCKER_USER --password-stdin"
                     sh "docker push ${REGISTRY}:${BUILD_NUMBER}"
