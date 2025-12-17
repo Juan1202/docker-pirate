@@ -14,7 +14,7 @@ pipeline {
     stages {
         stage('Hello') {
             steps {
-                echo 'Iniciando Pipeline Final - Fase Docker'
+                echo 'Iniciando Pipeline corregido - Sin errores de compilación'
             }
         }
 
@@ -42,11 +42,14 @@ pipeline {
         }
 
         stage('SonarQube Scan') {
+            // Definimos la herramienta aquí para evitar el error de compilación
+            environment {
+                SCANNER_HOME = tool 'sonar-scanner'
+            }
             steps {
                 withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
                     withSonarQubeEnv('sonarqube') {
-                        def scannerHome = tool 'sonar-scanner'
-                        sh "${scannerHome}/bin/sonar-scanner \
+                        sh "${SCANNER_HOME}/bin/sonar-scanner \
                             -Dsonar.projectKey=SimpleExpressExample:Test \
                             -Dsonar.projectName=SimpleExpressExample \
                             -Dsonar.projectVersion=0.0.${BUILD_NUMBER} \
@@ -57,7 +60,6 @@ pipeline {
                     }
                 }
                 timeout(time: 5, unit: 'MINUTES') {
-                    // Si el Webhook está bien configurado, esto pasará a verde
                     waitForQualityGate abortPipeline: true
                 }
             }
@@ -65,14 +67,12 @@ pipeline {
 
         stage('Build docker-image') {
             steps {
-                // Se usa sudo si Jenkins no está en el grupo docker
                 sh "cd ${PROJECT_ROOT} && docker build -t ${REGISTRY}:${BUILD_NUMBER} ."
             }
         }
 
         stage('Deploy docker-image') {
             steps {
-                // Asegúrate de crear esta credencial 'Username with password' con ID 'dockerhub-creds'
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', passwordVariable: 'DOCKER_PWD', usernameVariable: 'DOCKER_USER')]) {
                     sh "echo \$DOCKER_PWD | docker login -u \$DOCKER_USER --password-stdin"
                     sh "docker push ${REGISTRY}:${BUILD_NUMBER}"
