@@ -1,94 +1,104 @@
-// Function to validate that the message returned from SonarQube is ok
+// Función para validar el Quality Gate de SonarQube
 def qualityGateValidation(qg) {
-  if (qg.status != 'OK') {
-    // emailext body: "WARNING SANTI: Code coverage is lower than 80% in Pipeline ${BUILD_NUMBER}", subject: 'Error Sonar Scan,   Quality Gate', to: "${EMAIL_ADDRESS}"
-    return true
-  }
-  // emailext body: "CONGRATS SANTI: Code coverage is higher than 80%  in Pipeline ${BUILD_NUMBER} - SUCCESS", subject: 'Info - Correct Pipeline', to: "${EMAIL_ADDRESS}"
-  return false
+    if (qg.status != 'OK') {
+        echo "Quality Gate fallido: ${qg.status}"
+        return true
+    }
+    echo "Quality Gate aprobado"
+    return false
 }
+
 pipeline {
-  agent any
+    agent any
 
-  tools {
-      nodejs 'nodejs'
-  }
+    tools {
+        nodejs 'nodejs' // Debe estar configurado en 'Global Tool Configuration'
+    }
 
-  environment {
-      // General Variables for Pipeline
-      PROJECT_ROOT = 'express-mysql/app'
-      EMAIL_ADDRESS = 'san99tiagodevsecops@gmail.com'
-      REGISTRY = 'juan1202/docker-pirate-express'
-  }
+    environment {
+        // Ajustado según image_92e479.png: La app está en express-mysql/app
+        PROJECT_ROOT = 'express-mysql/app'
+        EMAIL_ADDRESS = 'san99tiagodevsecops@gmail.com'
+        REGISTRY = 'juan1202/docker-pirate-express'
+    }
 
-  stages {
-      stage('Hello') {
-        steps {
-          // First stage is a sample hello-world step to verify correct Jenkins Pipeline
-          echo 'Hello World, I am Happy'
-          echo 'This is my amazing Pipeline'
-        }
-      }
-      stage('Checkout') {
-        steps {
-        // Get Github repo using Github credentials (previously added to Jenkins credentials)
-        checkout([$class: 'GitSCM', branches: [[name: '*/main']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/Juan1202/docker-pirate.git']]])        }
-      }
-      stage('Install dependencies') {
-        steps {
-          sh 'npm --version'
-          sh "cd ${PROJECT_ROOT}; npm install"
-        }
-      }
-      stage('Unit tests') {
-        steps {
-          // Run unit tests
-          sh "cd ${PROJECT_ROOT}; npm run test"
-        }
-      }
-      stage('Generate coverage report') {
-        steps {
-          // Run code-coverage reports
-          sh "cd ${PROJECT_ROOT}; npm run coverage"
-        }
-      }
-      stage('scan') {
-          environment {
-            // Previously defined in the Jenkins "Global Tool Configuration"
-            scannerHome = tool 'sonar-scanner'
-          }
-          steps {
-            // "sonarqube" is the server configured in "Configure System"
-            withSonarQubeEnv('sonarqube') {
-              // Execute the SonarQube scanner with desired flags
-              sh "${scannerHome}/bin/sonar-scanner \
-                          -Dsonar.projectKey=SimpleExpressExample:Test \
-                          -Dsonar.projectName=SimpleExpressExample \
-                          -Dsonar.projectVersion=0.0.${BUILD_NUMBER} \
-                          -Dsonar.host.url=http://mysonarqube:9000 \
-                          -Dsonar.sources=./${PROJECT_ROOT}/app.js,./${PROJECT_ROOT}/config/db.config.js,./${PROJECT_ROOT}/routes/developers.js \
-                          -Dsonar.login=admin \
-                          -Dsonar.password=admin \
-                          -Dsonar.tests=./${PROJECT_ROOT}/test \
-                          -Dsonar.javascript.lcov.reportPaths=./${PROJECT_ROOT}/coverage/lcov.info"
+    stages {
+        stage('Hello') {
+            steps {
+                echo 'Iniciando Pipeline para rama feature'
             }
-            timeout(time: 3, unit: 'MINUTES') {
-              // In case of SonarQube failure or direct timeout exceed, stop Pipeline
-              waitForQualityGate abortPipeline: qualityGateValidation(waitForQualityGate())
+        }
+
+        stage('Checkout') {
+            steps {
+                // CORRECCIÓN: Se apunta a tu rama de feature y se añade Shallow Clone para evitar error 128
+                checkout([$class: 'GitSCM', 
+                    branches: [[name: '*/feature/configuracion-inicial-jenkins']], 
+                    extensions: [[$class: 'CloneOption', depth: 1, shallow: true, timeout: 30]], 
+                    userRemoteConfigs: [[url: 'https://github.com/Juan1202/docker-pirate.git']]
+                ])
             }
-          }
-      }
-      stage('Build docker-image') {
-        steps {
-          sh "cd ./${PROJECT_ROOT};docker build -t ${REGISTRY}:${BUILD_NUMBER} . "
         }
-      }
-      stage('Deploy docker-image') {
-        steps {
-          // If the Dockerhub authentication stopped, do it again
-          sh 'docker login'
-          sh "docker push ${REGISTRY}:${BUILD_NUMBER}"
+
+        stage('Install dependencies') {
+            steps {
+                // Navega a la carpeta de la app antes de instalar
+                sh "cd ${PROJECT_ROOT} && npm install"
+            }
         }
-      }
-  }
+
+        stage('Unit tests') {
+            steps {
+                sh "cd ${PROJECT_ROOT} && npm run test"
+            }
+        }
+
+        stage('Generate coverage report') {
+            steps {
+                sh "cd ${PROJECT_ROOT} && npm run coverage"
+            }
+        }
+
+        stage('SonarQube Scan') {
+            environment {
+                scannerHome = tool 'sonar-scanner'
+            }
+            steps {
+                withSonarQubeEnv('sonarqube') {
+                    sh "${scannerHome}/bin/sonar-scanner \
+                        -Dsonar.projectKey=SimpleExpressExample:Test \
+                        -Dsonar.projectName=SimpleExpressExample \
+                        -Dsonar.projectVersion=0.0.${BUILD_NUMBER} \
+                        -Dsonar.sources=${PROJECT_ROOT}/app.js,${PROJECT_ROOT}/config/db.config.js,${PROJECT_ROOT}/routes/developers.js \
+                        -Dsonar.tests=${PROJECT_ROOT}/test \
+                        -Dsonar.javascript.lcov.reportPaths=${PROJECT_ROOT}/coverage/lcov.info"
+                }
+                timeout(time: 5, unit: 'MINUTES') {
+                    script {
+                        def qg = waitForQualityGate()
+                        if (qualityGateValidation(qg)) {
+                            error "Pipeline abortado por fallas en Quality Gate"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Build docker-image') {
+            steps {
+                // Se construye desde la carpeta donde está el Dockerfile (express-mysql/app)
+                sh "cd ${PROJECT_ROOT} && docker build -t ${REGISTRY}:${BUILD_NUMBER} ."
+            }
+        }
+
+        stage('Deploy docker-image') {
+            steps {
+                // Asegúrate de tener configuradas las credenciales de DockerHub en Jenkins
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', passwordVariable: 'DOCKER_PWD', usernameVariable: 'DOCKER_USER')]) {
+                    sh "echo \$DOCKER_PWD | docker login -u \$DOCKER_USER --password-stdin"
+                    sh "docker push ${REGISTRY}:${BUILD_NUMBER}"
+                }
+            }
+        }
+    }
 }
