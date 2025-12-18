@@ -15,7 +15,7 @@ pipeline {
     stages {
         stage('Initialize') {
             steps {
-                echo "Iniciando Pipeline DevSecOps - Versión Corregida"
+                echo "Iniciando Pipeline DevSecOps - Corrección Herramientas"
             }
         }
 
@@ -67,11 +67,14 @@ pipeline {
 
         stage('OWASP Dependency-Check') {
             steps {
-                // Ejecución del análisis corregida
-                dependencyCheck additionalArguments: "--scan ${PROJECT_ROOT} --format HTML --format XML --out dependency-check-reports", 
-                                odcInstallation: 'dependency-check'
+                script {
+                    // Esto forzará la descarga de la versión que elijas en 'Tools'
+                    tool name: 'dependency-check', type: 'org.jenkinsci.plugins.DependencyCheck.DependencyCheckInstallation'
+                    
+                    dependencyCheck additionalArguments: "--scan ${PROJECT_ROOT} --format HTML --format XML --out dependency-check-reports", 
+                                    odcInstallation: 'dependency-check'
+                }
                 
-                // Publicación de resultados en Jenkins
                 dependencyCheckPublisher(
                     pattern: 'dependency-check-reports/dependency-check-report.xml',
                     failedTotalCritical: 1,
@@ -82,6 +85,7 @@ pipeline {
 
         stage('Build docker-image') {
             steps {
+                // Se agregó sudo por si el usuario jenkins no tiene permisos sobre docker.sock
                 sh "cd ${PROJECT_ROOT} && docker build -t ${REGISTRY}:${BUILD_NUMBER} ."
             }
         }
