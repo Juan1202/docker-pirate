@@ -67,14 +67,11 @@ pipeline {
 
         stage('OWASP Dependency-Check') {
             steps {
-                script {
-                    // Esto forzará la descarga de la versión que elijas en 'Tools'
-                    tool name: 'dependency-check', type: 'org.jenkinsci.plugins.DependencyCheck.DependencyCheckInstallation'
-                    
-                    dependencyCheck additionalArguments: "--scan ${PROJECT_ROOT} --format HTML --format XML --out dependency-check-reports", 
-                                    odcInstallation: 'dependency-check'
-                }
+                // El parámetro 'odcInstallation' debe ser igual al 'Nombre' en Jenkins Tools
+                dependencyCheck additionalArguments: "--scan ${PROJECT_ROOT} --format HTML --format XML --out dependency-check-reports", 
+                                odcInstallation: 'dependency-check'
                 
+                // Publica los resultados en la interfaz
                 dependencyCheckPublisher(
                     pattern: 'dependency-check-reports/dependency-check-report.xml',
                     failedTotalCritical: 1,
