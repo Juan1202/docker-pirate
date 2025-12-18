@@ -64,6 +64,26 @@ pipeline {
                 }
             }
         }
+        stage('OWASP Dependency-Check') {
+            steps {
+                // Llama a la herramienta configurada en el paso 2
+                dependencyCheck tool: 'dependency-check'
+                
+                // Ejecuta el análisis
+                dependencyCheckAnalyzer(
+                    datadir: 'dependency-check-data',
+                    includeHtmlReports: true,
+                    includeVulnReports: true,
+                    isAutoupdateDisabled: false, // Permite descargar la base de datos de CVEs
+                    outdir: 'dependency-check-reports',
+                    scanpath: "${PROJECT_ROOT}", // Escanea tu carpeta express-mysql/app
+                    skipOnPreFlightError: false
+                )
+                
+                // Publica el reporte gráfico en el menú lateral de Jenkins
+                dependencyCheckPublisher pattern: 'dependency-check-reports/dependency-check-report.xml'
+            }
+        }
 
         stage('Build docker-image') {
             steps {
