@@ -7,14 +7,15 @@ pipeline {
 
     environment {
         PROJECT_ROOT = 'express-mysql/app'
-        EMAIL_ADDRESS = 'san99tiagodevsecops@gmail.com'
         REGISTRY = 'juan1202/docker-pirate-express'
+        SONAR_CRED_ID = 'sonar-token'
+        DOCKER_CRED_ID = 'dockerhub-creds'
     }
 
     stages {
-        stage('Hello') {
+        stage('Initialize') {
             steps {
-                echo 'Iniciando Pipeline corregido - Sin errores de compilación'
+                echo "Iniciando Pipeline DevSecOps - Corrección Dependency-Check"
             }
         }
 
@@ -42,12 +43,11 @@ pipeline {
         }
 
         stage('SonarQube Scan') {
-            // Definimos la herramienta aquí para evitar el error de compilación
             environment {
                 SCANNER_HOME = tool 'sonar-scanner'
             }
             steps {
-                withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                withCredentials([string(credentialsId: "${SONAR_CRED_ID}", variable: 'SONAR_TOKEN')]) {
                     withSonarQubeEnv('sonarqube') {
                         sh "${SCANNER_HOME}/bin/sonar-scanner \
                             -Dsonar.projectKey=SimpleExpressExample:Test \
@@ -60,44 +60,55 @@ pipeline {
                     }
                 }
                 timeout(time: 5, unit: 'MINUTES') {
+                    // Espera que SonarQube termine el análisis que ya vimos que pasa a 'Passed'
                     waitForQualityGate abortPipeline: true
                 }
             }
         }
+
         stage('OWASP Dependency-Check') {
             steps {
-                // Llama a la herramienta configurada en el paso 2
-                dependencyCheck tool: 'dependency-check'
-                
-                // Ejecuta el análisis
+                // CORRECCIÓN: Eliminamos el parámetro 'tool' que causaba el error
+                // El plugin usará la instalación por defecto configurada en 'Tools'
                 dependencyCheckAnalyzer(
                     datadir: 'dependency-check-data',
                     includeHtmlReports: true,
                     includeVulnReports: true,
-                    isAutoupdateDisabled: false, // Permite descargar la base de datos de CVEs
+                    isAutoupdateDisabled: false,
                     outdir: 'dependency-check-reports',
-                    scanpath: "${PROJECT_ROOT}", // Escanea tu carpeta express-mysql/app
+                    scanpath: "${PROJECT_ROOT}",
                     skipOnPreFlightError: false
                 )
                 
-                // Publica el reporte gráfico en el menú lateral de Jenkins
-                dependencyCheckPublisher pattern: 'dependency-check-reports/dependency-check-report.xml'
+                dependencyCheckPublisher(
+                    pattern: 'dependency-check-reports/dependency-check-report.xml',
+                    failedTotalCritical: 1,
+                    failedTotalHigh: 5
+                )
             }
         }
 
         stage('Build docker-image') {
             steps {
+                // Esta etapa ya te funcionaba correctamente según tus logs anteriores
                 sh "cd ${PROJECT_ROOT} && docker build -t ${REGISTRY}:${BUILD_NUMBER} ."
             }
         }
 
         stage('Deploy docker-image') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', passwordVariable: 'DOCKER_PWD', usernameVariable: 'DOCKER_USER')]) {
+                // Asegúrate de haber creado la credencial 'dockerhub-creds' para evitar el error previo
+                withCredentials([usernamePassword(credentialsId: "${DOCKER_CRED_ID}", passwordVariable: 'DOCKER_PWD', usernameVariable: 'DOCKER_USER')]) {
                     sh "echo \$DOCKER_PWD | docker login -u \$DOCKER_USER --password-stdin"
                     sh "docker push ${REGISTRY}:${BUILD_NUMBER}"
                 }
             }
+        }
+    }
+    
+    post {
+        always {
+            echo "Pipeline finalizado."
         }
     }
 }
