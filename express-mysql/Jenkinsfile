@@ -15,7 +15,7 @@ pipeline {
     stages {
         stage('Initialize') {
             steps {
-                echo "Iniciando Pipeline DevSecOps - Corrección Dependency-Check"
+                echo "Iniciando Pipeline DevSecOps - Versión Corregida"
             }
         }
 
@@ -60,7 +60,6 @@ pipeline {
                     }
                 }
                 timeout(time: 5, unit: 'MINUTES') {
-                    // Espera que SonarQube termine el análisis que ya vimos que pasa a 'Passed'
                     waitForQualityGate abortPipeline: true
                 }
             }
@@ -68,18 +67,11 @@ pipeline {
 
         stage('OWASP Dependency-Check') {
             steps {
-                // CORRECCIÓN: Eliminamos el parámetro 'tool' que causaba el error
-                // El plugin usará la instalación por defecto configurada en 'Tools'
-                dependencyCheckAnalyzer(
-                    datadir: 'dependency-check-data',
-                    includeHtmlReports: true,
-                    includeVulnReports: true,
-                    isAutoupdateDisabled: false,
-                    outdir: 'dependency-check-reports',
-                    scanpath: "${PROJECT_ROOT}",
-                    skipOnPreFlightError: false
-                )
+                // Ejecución del análisis corregida
+                dependencyCheck additionalArguments: "--scan ${PROJECT_ROOT} --format HTML --format XML --out dependency-check-reports", 
+                                odcInstallation: 'dependency-check'
                 
+                // Publicación de resultados en Jenkins
                 dependencyCheckPublisher(
                     pattern: 'dependency-check-reports/dependency-check-report.xml',
                     failedTotalCritical: 1,
@@ -90,14 +82,12 @@ pipeline {
 
         stage('Build docker-image') {
             steps {
-                // Esta etapa ya te funcionaba correctamente según tus logs anteriores
                 sh "cd ${PROJECT_ROOT} && docker build -t ${REGISTRY}:${BUILD_NUMBER} ."
             }
         }
 
         stage('Deploy docker-image') {
             steps {
-                // Asegúrate de haber creado la credencial 'dockerhub-creds' para evitar el error previo
                 withCredentials([usernamePassword(credentialsId: "${DOCKER_CRED_ID}", passwordVariable: 'DOCKER_PWD', usernameVariable: 'DOCKER_USER')]) {
                     sh "echo \$DOCKER_PWD | docker login -u \$DOCKER_USER --password-stdin"
                     sh "docker push ${REGISTRY}:${BUILD_NUMBER}"
