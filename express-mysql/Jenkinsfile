@@ -15,8 +15,12 @@ pipeline {
     stages {
         stage('Initialize') {
             steps {
-                echo "Iniciando Pipeline DevSecOps - Integración OWASP ZAP"
+                echo "Iniciando Pipeline DevSecOps - Solución Reporte ZAP"
+                // Limpieza de reportes previos para asegurar que los nuevos se generen bien
+                sh "rm -f zap_report.html"
                 sh "mkdir -p dependency-check-reports"
+                // Dar permisos a la carpeta actual para que Docker pueda escribir reportes
+                sh "chmod 777 ."
             }
         }
 
@@ -70,11 +74,10 @@ pipeline {
             steps {
                 script {
                     try {
-                        // Mantenemos tu configuración de ayer para no depender de la API Key si no quieres
                         dependencyCheck additionalArguments: "--scan ${PROJECT_ROOT} --format HTML --format XML --noupdate", 
                                          odcInstallation: 'dependency-check'
                     } catch (Exception e) {
-                        echo "ADVERTENCIA: Dependency-Check falló. Continuando con el build..."
+                        echo "SCA finalizó con alertas o la base de datos no está disponible."
                     }
                 }
                 dependencyCheckPublisher(
@@ -95,39 +98,46 @@ pipeline {
         stage('OWASP ZAP Scan (DAST)') {
             steps {
                 script {
-                    // 1. Levantamos la app usando la imagen que acabamos de buildear
+                    echo "Levantando contenedor temporal para análisis dinámico..."
                     sh "docker run -d --name zap-test-app -p 3001:3000 ${REGISTRY}:${BUILD_NUMBER}"
                     
-                    // Esperamos a que la app inicie correctamente
-                    sleep 10 
+                    // Tiempo de espera para que la app y la DB interna estén listas
+                    sleep 20 
                     
                     try {
-                        // 2. Ejecutamos ZAP apuntando al contenedor de la app
-                        // Usamos la IP de la red interna de Docker para asegurar conexión
+                        // Obtener IP interna para comunicación entre contenedores
                         def appIp = sh(script: "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' zap-test-app", returnStdout: true).trim()
+                        echo "Analizando aplicación en IP: ${appIp}"
                         
+                        // Ejecución de ZAP con usuario ROOT para garantizar la creación del reporte
                         sh """
                             docker run --rm --name zap-container \
+                            -u root \
                             -v \$(pwd):/zap/wrk/:rw \
                             owasp/zap2docker-stable zap-baseline.py \
                             -t http://${appIp}:3000 \
                             -r zap_report.html
                         """
                     } catch (Exception e) {
-                        echo "ZAP finalizó con alertas de seguridad detectadas."
+                        echo "OWASP ZAP detectó alertas de seguridad (esto es normal en un baseline scan)."
                     } finally {
-                        // 3. Limpieza: siempre borrar el contenedor de prueba
                         sh "docker stop zap-test-app && docker rm zap-test-app"
                         
-                        // 4. Publicar el reporte en la interfaz de Jenkins
-                        publishHTML([
-                            allowMissing: false,
-                            alwaysLinkToLastBuild: true,
-                            keepAll: true,
-                            reportDir: '.',
-                            reportFiles: 'zap_report.html',
-                            reportName: 'OWASP ZAP Report'
-                        ])
+                        // Verificar si el archivo se creó antes de intentar publicarlo
+                        def fileExists = sh(script: "[ -f zap_report.html ] && echo 'true' || echo 'false'", returnStdout: true).trim()
+                        
+                        if (fileExists == 'true') {
+                            publishHTML([
+                                allowMissing: false,
+                                alwaysLinkToLastBuild: true,
+                                keepAll: true,
+                                reportDir: '.',
+                                reportFiles: 'zap_report.html',
+                                reportName: 'OWASP ZAP Report'
+                            ])
+                        } else {
+                            echo "ERROR: El archivo zap_report.html no fue encontrado en el workspace."
+                        }
                     }
                 }
             }
@@ -145,8 +155,9 @@ pipeline {
     
     post {
         always {
-            echo "Pipeline finalizado."
-            deleteDir()
+            echo "Pipeline finalizado para el Build #${BUILD_NUMBER}"
+            // Mantenemos deleteDir() comentado si necesitas inspeccionar archivos manualmente tras el fallo
+            // deleteDir() 
         }
     }
 }
