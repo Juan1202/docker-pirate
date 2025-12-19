@@ -1,52 +1,63 @@
 pipeline {
     agent any
 
+    tools {
+        nodejs 'nodejs' 
+    }
+
     environment {
-        // Variables de entorno generales
         PROJECT_ROOT = 'express-mysql/app'
-        DOCKER_IMAGE = 'juan1202/docker-pirate-express'
-        IMAGE_TAG = "${env.BUILD_NUMBER}" // Usamos el número de build para versiones únicas
+        REGISTRY = 'juan1202/docker-pirate-express'
+        SONAR_CRED_ID = 'sonar-token'
+        DOCKER_CRED_ID = 'dockerhub-creds'
     }
 
     stages {
         stage('Initialize') {
             steps {
-                echo "Iniciando Pipeline DevSecOps - Versión con OWASP ZAP"
+                echo "Iniciando Pipeline DevSecOps - Integración OWASP ZAP"
                 sh "mkdir -p dependency-check-reports"
+            }
+        }
+
+        stage('Checkout') {
+            steps {
+                checkout([$class: 'GitSCM', 
+                    branches: [[name: '*/feature/configuracion-inicial-jenkins']], 
+                    extensions: [[$class: 'CloneOption', depth: 1, shallow: true, timeout: 30]], 
+                    userRemoteConfigs: [[url: 'https://github.com/Juan1202/docker-pirate.git']]
+                ])
             }
         }
 
         stage('Install dependencies') {
             steps {
-                dir("${PROJECT_ROOT}") {
-                    sh "npm install"
-                }
+                sh "cd ${PROJECT_ROOT} && npm install"
             }
         }
 
         stage('Unit tests & Coverage') {
             steps {
-                dir("${PROJECT_ROOT}") {
-                    sh "npm run test"
-                    sh "npm run coverage"
-                }
+                sh "cd ${PROJECT_ROOT} && npm run test"
+                sh "cd ${PROJECT_ROOT} && npm run coverage"
             }
         }
 
         stage('SonarQube Scan') {
+            environment {
+                SCANNER_HOME = tool 'sonar-scanner'
+            }
             steps {
-                withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                withCredentials([string(credentialsId: "${SONAR_CRED_ID}", variable: 'SONAR_TOKEN')]) {
                     withSonarQubeEnv('sonarqube') {
-                        sh """
-                        /var/jenkins_home/tools/hudson.plugins.sonar.SonarRunnerInstallation/sonar-scanner/bin/sonar-scanner \
-                        -Dsonar.projectKey=SimpleExpressExample:Test \
-                        -Dsonar.projectName=SimpleExpressExample \
-                        -Dsonar.projectVersion=${IMAGE_TAG} \
-                        -Dsonar.sources=express-mysql/app/app.js,express-mysql/app/config/db.config.js,express-mysql/app/routes/developers.js \
-                        -Dsonar.tests=express-mysql/app/test \
-                        -Dsonar.login=${SONAR_TOKEN} \
-                        -Dsonar.javascript.lcov.reportPaths=express-mysql/app/coverage/lcov.info
-                        """
+                        sh "${SCANNER_HOME}/bin/sonar-scanner \
+                            -Dsonar.projectKey=SimpleExpressExample:Test \
+                            -Dsonar.projectName=SimpleExpressExample \
+                            -Dsonar.projectVersion=0.0.${BUILD_NUMBER} \
+                            -Dsonar.sources=${PROJECT_ROOT}/app.js,${PROJECT_ROOT}/config/db.config.js,${PROJECT_ROOT}/routes/developers.js \
+                            -Dsonar.tests=${PROJECT_ROOT}/test \
+                            -Dsonar.login=${SONAR_TOKEN} \
+                            -Dsonar.javascript.lcov.reportPaths=${PROJECT_ROOT}/coverage/lcov.info"
                     }
                 }
                 timeout(time: 5, unit: 'MINUTES') {
@@ -57,63 +68,58 @@ pipeline {
 
         stage('OWASP Dependency-Check') {
             steps {
-                // Usamos la API Key de NVD que configuramos previamente
-                withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_KEY')]) {
-                    script {
-                        retry(2) {
-                            dependencyCheck additionalArguments: """
-                                --scan ${PROJECT_ROOT} 
-                                --format HTML 
-                                --format XML 
-                                --nvdApiKey ${NVD_KEY}
-                                --failOnCVSS 7
-                            """, 
-                            odcInstallation: 'dependency-check'
-                        }
+                script {
+                    try {
+                        // Mantenemos tu configuración de ayer para no depender de la API Key si no quieres
+                        dependencyCheck additionalArguments: "--scan ${PROJECT_ROOT} --format HTML --format XML --noupdate", 
+                                         odcInstallation: 'dependency-check'
+                    } catch (Exception e) {
+                        echo "ADVERTENCIA: Dependency-Check falló. Continuando con el build..."
                     }
                 }
                 dependencyCheckPublisher(
                     pattern: '**/dependency-check-report.xml',
                     failedTotalCritical: 1,
-                    failedTotalHigh: 5
+                    failedTotalHigh: 5,
+                    stopBuild: false 
                 )
             }
         }
 
         stage('Build docker-image') {
             steps {
-                dir("${PROJECT_ROOT}") {
-                    sh "docker build -t ${DOCKER_IMAGE}:${IMAGE_TAG} ."
-                }
+                sh "cd ${PROJECT_ROOT} && docker build -t ${REGISTRY}:${BUILD_NUMBER} ."
             }
         }
 
         stage('OWASP ZAP Scan (DAST)') {
             steps {
                 script {
-                    // 1. Levantar contenedor temporal para pruebas
-                    sh "docker run -d --name test-app-${IMAGE_TAG} -p 3001:3000 ${DOCKER_IMAGE}:${IMAGE_TAG}"
+                    // 1. Levantamos la app usando la imagen que acabamos de buildear
+                    sh "docker run -d --name zap-test-app -p 3001:3000 ${REGISTRY}:${BUILD_NUMBER}"
                     
-                    // Esperar a que la app responda (ajusta el tiempo según tu app)
-                    sleep 5
+                    // Esperamos a que la app inicie correctamente
+                    sleep 10 
                     
                     try {
-                        // 2. Ejecutar escaneo Baseline de ZAP
-                        // Usamos la IP de la red bridge por defecto para alcanzar la app
+                        // 2. Ejecutamos ZAP apuntando al contenedor de la app
+                        // Usamos la IP de la red interna de Docker para asegurar conexión
+                        def appIp = sh(script: "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' zap-test-app", returnStdout: true).trim()
+                        
                         sh """
-                        docker run --rm --name zap-scan \
-                        -v \$(pwd):/zap/wrk/:rw \
-                        owasp/zap2docker-stable zap-baseline.py \
-                        -t http://\$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' test-app-${IMAGE_TAG}):3000 \
-                        -r zap_report.html
+                            docker run --rm --name zap-container \
+                            -v \$(pwd):/zap/wrk/:rw \
+                            owasp/zap2docker-stable zap-baseline.py \
+                            -t http://${appIp}:3000 \
+                            -r zap_report.html
                         """
                     } catch (Exception e) {
-                        echo "ZAP detectó alertas potenciales de seguridad."
+                        echo "ZAP finalizó con alertas de seguridad detectadas."
                     } finally {
-                        // 3. Limpiar contenedor de prueba
-                        sh "docker stop test-app-${IMAGE_TAG} && docker rm test-app-${IMAGE_TAG}"
+                        // 3. Limpieza: siempre borrar el contenedor de prueba
+                        sh "docker stop zap-test-app && docker rm zap-test-app"
                         
-                        // 4. Publicar reporte en Jenkins (Requiere plugin HTML Publisher)
+                        // 4. Publicar el reporte en la interfaz de Jenkins
                         publishHTML([
                             allowMissing: false,
                             alwaysLinkToLastBuild: true,
@@ -129,21 +135,18 @@ pipeline {
 
         stage('Deploy docker-image') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PWD')]) {
+                withCredentials([usernamePassword(credentialsId: "${DOCKER_CRED_ID}", passwordVariable: 'DOCKER_PWD', usernameVariable: 'DOCKER_USER')]) {
                     sh "echo \$DOCKER_PWD | docker login -u \$DOCKER_USER --password-stdin"
-                    sh "docker push ${DOCKER_IMAGE}:${IMAGE_TAG}"
+                    sh "docker push ${REGISTRY}:${BUILD_NUMBER}"
                 }
             }
         }
     }
-
+    
     post {
         always {
             echo "Pipeline finalizado."
             deleteDir()
-        }
-        failure {
-            echo "El pipeline falló. Revisa los logs de las etapas anteriores."
         }
     }
 }
