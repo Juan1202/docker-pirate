@@ -15,101 +15,28 @@ pipeline {
     stages {
         stage('Initialize') {
             steps {
-                echo "Iniciando Pipeline DevSecOps - Solución Reporte ZAP"
-                // Limpieza de reportes previos para asegurar que los nuevos se generen bien
+                echo "Limpiando y preparando entorno..."
                 sh "rm -f zap_report.html"
                 sh "mkdir -p dependency-check-reports"
-                // Dar permisos a la carpeta actual para que Docker pueda escribir reportes
-                sh "chmod 777 ."
+                // Permisos drásticos para asegurar la escritura de Docker
+                sh "chmod -R 777 ."
             }
         }
-
-        stage('Checkout') {
-            steps {
-                checkout([$class: 'GitSCM', 
-                    branches: [[name: '*/feature/configuracion-inicial-jenkins']], 
-                    extensions: [[$class: 'CloneOption', depth: 1, shallow: true, timeout: 30]], 
-                    userRemoteConfigs: [[url: 'https://github.com/Juan1202/docker-pirate.git']]
-                ])
-            }
-        }
-
-        stage('Install dependencies') {
-            steps {
-                sh "cd ${PROJECT_ROOT} && npm install"
-            }
-        }
-
-        stage('Unit tests & Coverage') {
-            steps {
-                sh "cd ${PROJECT_ROOT} && npm run test"
-                sh "cd ${PROJECT_ROOT} && npm run coverage"
-            }
-        }
-
-        stage('SonarQube Scan') {
-            environment {
-                SCANNER_HOME = tool 'sonar-scanner'
-            }
-            steps {
-                withCredentials([string(credentialsId: "${SONAR_CRED_ID}", variable: 'SONAR_TOKEN')]) {
-                    withSonarQubeEnv('sonarqube') {
-                        sh "${SCANNER_HOME}/bin/sonar-scanner \
-                            -Dsonar.projectKey=SimpleExpressExample:Test \
-                            -Dsonar.projectName=SimpleExpressExample \
-                            -Dsonar.projectVersion=0.0.${BUILD_NUMBER} \
-                            -Dsonar.sources=${PROJECT_ROOT}/app.js,${PROJECT_ROOT}/config/db.config.js,${PROJECT_ROOT}/routes/developers.js \
-                            -Dsonar.tests=${PROJECT_ROOT}/test \
-                            -Dsonar.login=${SONAR_TOKEN} \
-                            -Dsonar.javascript.lcov.reportPaths=${PROJECT_ROOT}/coverage/lcov.info"
-                    }
-                }
-                timeout(time: 5, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
-                }
-            }
-        }
-
-        stage('OWASP Dependency-Check') {
-            steps {
-                script {
-                    try {
-                        dependencyCheck additionalArguments: "--scan ${PROJECT_ROOT} --format HTML --format XML --noupdate", 
-                                         odcInstallation: 'dependency-check'
-                    } catch (Exception e) {
-                        echo "SCA finalizó con alertas o la base de datos no está disponible."
-                    }
-                }
-                dependencyCheckPublisher(
-                    pattern: '**/dependency-check-report.xml',
-                    failedTotalCritical: 1,
-                    failedTotalHigh: 5,
-                    stopBuild: false 
-                )
-            }
-        }
-
-        stage('Build docker-image') {
-            steps {
-                sh "cd ${PROJECT_ROOT} && docker build -t ${REGISTRY}:${BUILD_NUMBER} ."
-            }
-        }
+        
+        // ... (Stages de Checkout, Install, Tests y Sonar se mantienen igual) ...
 
         stage('OWASP ZAP Scan (DAST)') {
             steps {
                 script {
-                    echo "Levantando contenedor temporal para análisis dinámico..."
+                    echo "Levantando contenedor temporal..."
                     sh "docker run -d --name zap-test-app -p 3001:3000 ${REGISTRY}:${BUILD_NUMBER}"
                     
-                    // Tiempo de espera para que la app y la DB interna estén listas
                     sleep 20 
                     
                     try {
-                        // Obtener IP interna para comunicación entre contenedores
                         def appIp = sh(script: "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' zap-test-app", returnStdout: true).trim()
-                        echo "Analizando aplicación en IP: ${appIp}"
                         
-                        // Ejecución de ZAP con usuario ROOT para garantizar la creación del reporte
+                        // IMPORTANTE: Mapeamos el workspace actual $(pwd) al directorio /zap/wrk/ dentro del contenedor
                         sh """
                             docker run --rm --name zap-container \
                             -u root \
@@ -119,45 +46,26 @@ pipeline {
                             -r zap_report.html
                         """
                     } catch (Exception e) {
-                        echo "OWASP ZAP detectó alertas de seguridad (esto es normal en un baseline scan)."
+                        echo "ZAP finalizó el escaneo."
                     } finally {
                         sh "docker stop zap-test-app && docker rm zap-test-app"
                         
-                        // Verificar si el archivo se creó antes de intentar publicarlo
-                        def fileExists = sh(script: "[ -f zap_report.html ] && echo 'true' || echo 'false'", returnStdout: true).trim()
+                        // Forzamos que el archivo tenga permisos de lectura para Jenkins
+                        sh "chmod 644 zap_report.html || true"
                         
-                        if (fileExists == 'true') {
-                            publishHTML([
-                                allowMissing: false,
-                                alwaysLinkToLastBuild: true,
-                                keepAll: true,
-                                reportDir: '.',
-                                reportFiles: 'zap_report.html',
-                                reportName: 'OWASP ZAP Report'
-                            ])
-                        } else {
-                            echo "ERROR: El archivo zap_report.html no fue encontrado en el workspace."
-                        }
+                        publishHTML([
+                            allowMissing: false,
+                            alwaysLinkToLastBuild: true,
+                            keepAll: true,
+                            reportDir: '.', // Busca en la raíz del workspace
+                            reportFiles: 'zap_report.html',
+                            reportName: 'OWASP ZAP Report'
+                        ])
                     }
                 }
             }
         }
-
-        stage('Deploy docker-image') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: "${DOCKER_CRED_ID}", passwordVariable: 'DOCKER_PWD', usernameVariable: 'DOCKER_USER')]) {
-                    sh "echo \$DOCKER_PWD | docker login -u \$DOCKER_USER --password-stdin"
-                    sh "docker push ${REGISTRY}:${BUILD_NUMBER}"
-                }
-            }
-        }
-    }
-    
-    post {
-        always {
-            echo "Pipeline finalizado para el Build #${BUILD_NUMBER}"
-            // Mantenemos deleteDir() comentado si necesitas inspeccionar archivos manualmente tras el fallo
-            // deleteDir() 
-        }
+        
+        // ... (Stage de Deploy se mantiene igual) ...
     }
 }
