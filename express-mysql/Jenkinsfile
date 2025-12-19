@@ -15,7 +15,7 @@ pipeline {
     stages {
         stage('Initialize') {
             steps {
-                echo "Limpiando reportes previos y preparando entorno..."
+                echo "Preparando espacio de trabajo..."
                 sh "rm -f zap_report.html"
                 sh "mkdir -p dependency-check-reports"
                 sh "chmod -R 777 ."
@@ -75,7 +75,7 @@ pipeline {
                         dependencyCheck additionalArguments: "--scan ${PROJECT_ROOT} --format HTML --format XML --noupdate", 
                                          odcInstallation: 'dependency-check'
                     } catch (Exception e) {
-                        echo "SCA finalizado."
+                        echo "Alerta en SCA."
                     }
                 }
                 dependencyCheckPublisher(pattern: '**/dependency-check-report.xml', stopBuild: false)
@@ -84,7 +84,6 @@ pipeline {
 
         stage('Build docker-image') {
             steps {
-                echo "Construyendo imagen local para escaneo: ${REGISTRY}:${BUILD_NUMBER}"
                 sh "cd ${PROJECT_ROOT} && docker build -t ${REGISTRY}:${BUILD_NUMBER} ."
             }
         }
@@ -92,17 +91,15 @@ pipeline {
         stage('OWASP ZAP Scan (DAST)') {
             steps {
                 script {
-                    echo "Iniciando contenedor de la aplicación..."
+                    echo "Iniciando escaneo dinámico..."
                     sh "docker run -d --name zap-test-app -p 3001:3000 ${REGISTRY}:${BUILD_NUMBER}"
                     
-                    // Tiempo de espera para asegurar que la app responda
                     sleep 25 
                     
                     try {
                         def appIp = sh(script: "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' zap-test-app", returnStdout: true).trim()
-                        echo "App detectada en IP interna: ${appIp}"
                         
-                        // USANDO LA NUEVA IMAGEN OFICIAL DE ZAP (GHCR)
+                        // Forzamos la creación del reporte en el directorio montado
                         sh """
                             docker run --rm --name zap-container \
                             -u root \
@@ -112,16 +109,15 @@ pipeline {
                             -r zap_report.html
                         """
                     } catch (Exception e) {
-                        echo "ZAP completó el escaneo con hallazgos de seguridad."
+                        echo "Escaneo finalizado."
                     } finally {
-                        echo "Limpiando contenedores de prueba..."
                         sh "docker stop zap-test-app && docker rm zap-test-app"
                         
-                        // Corregimos permisos para que Jenkins pueda leer el reporte
-                        sh "chmod 666 zap_report.html || echo 'El reporte no se pudo generar'"
+                        // PASO CRÍTICO: Asegurar que el archivo pertenece a Jenkins y es legible
+                        sh "chmod 777 zap_report.html || true"
                         
                         publishHTML([
-                            allowMissing: true,
+                            allowMissing: false,
                             alwaysLinkToLastBuild: true,
                             keepAll: true,
                             reportDir: '.', 
@@ -140,12 +136,6 @@ pipeline {
                     sh "docker push ${REGISTRY}:${BUILD_NUMBER}"
                 }
             }
-        }
-    }
-    
-    post {
-        always {
-            echo "Pipeline DevSecOps finalizado para el Build #${BUILD_NUMBER}"
         }
     }
 }
