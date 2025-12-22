@@ -16,13 +16,11 @@ pipeline {
         stage('Initialize') {
             steps {
                 echo "Preparando entorno..."
-                // Limpiamos cualquier rastro anterior
                 sh "rm -f zap_report.html"
                 sh "chmod -R 777 ."
             }
         }
 
-        // ... (Etapas de Checkout, Install, Tests, Sonar se mantienen igual) ...
         stage('Checkout') {
             steps {
                 checkout([$class: 'GitSCM', 
@@ -30,6 +28,18 @@ pipeline {
                     extensions: [[$class: 'CloneOption', depth: 1, shallow: true, timeout: 30]], 
                     userRemoteConfigs: [[url: 'https://github.com/Juan1202/docker-pirate.git']]
                 ])
+            }
+        }
+
+        stage('Secret Scanning (TruffleHog)') {
+            steps {
+                script {
+                    echo "Buscando credenciales expuestas en el historial y código..."
+                    // Escaneamos el sistema de archivos actual montado en el contenedor
+                    sh """
+                        docker run --rm -v \$(pwd):/proj trufflesecurity/trufflehog:latest github --repo file:///proj --only-verified
+                    """
+                }
             }
         }
 
@@ -98,7 +108,6 @@ pipeline {
                     try {
                         def appIp = sh(script: "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' zap-test-app", returnStdout: true).trim()
                         
-                        // NOTA: Forzamos la ruta absoluta del workspace para el volumen
                         sh """
                             docker run --rm --name zap-container \
                             -u root \
@@ -112,7 +121,6 @@ pipeline {
                     } finally {
                         sh "docker stop zap-test-app && docker rm zap-test-app"
                         
-                        // BUSCAMOS EL ARCHIVO DONDE SEA QUE HAYA QUEDADO Y LO TRAEMOS A LA RAÍZ
                         sh "find . -name 'zap_report.html' -exec cp {} . \\;"
                         sh "chmod 777 zap_report.html || true"
                         
