@@ -83,13 +83,21 @@ pipeline {
             steps {
                 script {
                     try {
-                        dependencyCheck additionalArguments: "--scan ${PROJECT_ROOT} --format HTML --format XML --noupdate", 
-                                         odcInstallation: 'dependency-check'
+                        // Agregamos --out . para asegurar que el reporte quede en la raíz del workspace
+                        dependencyCheck additionalArguments: """
+                            --scan ${PROJECT_ROOT} 
+                            --format HTML 
+                            --format XML 
+                            --out . 
+                            --noupdate
+                        """, 
+                        odcInstallation: 'dependency-check'
                     } catch (Exception e) {
-                        echo "SCA finalizado."
+                        echo "SCA finalizado con alertas."
                     }
                 }
-                dependencyCheckPublisher(pattern: '**/dependency-check-report.xml', stopBuild: false)
+                // El patrón ahora encontrará el archivo directamente en la raíz
+                dependencyCheckPublisher(pattern: 'dependency-check-report.xml', stopBuild: false)
             }
         }
 
