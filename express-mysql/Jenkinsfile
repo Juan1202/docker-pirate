@@ -116,7 +116,11 @@ pipeline {
         stage('OWASP ZAP Scan (DAST)') {
             steps {
                 script {
-                    sh "docker run -d --name zap-test-app -p 3001:3000 ${REGISTRY}:${BUILD_NUMBER}"
+                    // Limpieza preventiva
+                    sh "docker rm -f zap-test-app || true" 
+            
+            // Levantar la aplicación para el escaneo
+                    sh "docker run -d --name zap-test-app -p 3001:3000 juan1202/docker-pirate-express:${BUILD_NUMBER}"
                     sleep 25 
                     
                     try {
