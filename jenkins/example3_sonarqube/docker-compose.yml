@@ -32,7 +32,7 @@ services:
 
   sonarqube:
     # ... (se mantiene igual)
-    image: sonarqube:lts-community
+    image: sonarqube:10.7-community
     container_name: sonarqube
     depends_on:
       - postgres

@@ -83,7 +83,8 @@ pipeline {
             steps {
                 script {
                     try {
-                        // Agregamos --out . para asegurar que el reporte quede en la raíz del workspace
+                        // Forzamos la salida (--out) a la raíz del workspace '.'
+                        // Esto asegura que el plugin de Jenkins encuentre el archivo XML
                         dependencyCheck additionalArguments: """
                             --scan ${PROJECT_ROOT} 
                             --format HTML 
@@ -93,14 +94,13 @@ pipeline {
                         """, 
                         odcInstallation: 'dependency-check'
                     } catch (Exception e) {
-                        echo "SCA finalizado con alertas."
+                        echo "SCA finalizado. Revisar reportes si hay alertas."
                     }
                 }
-                // El patrón ahora encontrará el archivo directamente en la raíz
+                // Al estar en la raíz, el patrón lo encontrará sin problemas
                 dependencyCheckPublisher(pattern: 'dependency-check-report.xml', stopBuild: false)
             }
         }
-
         stage('Build docker-image') {
             steps {
                 sh "cd ${PROJECT_ROOT} && docker build -t ${REGISTRY}:${BUILD_NUMBER} ."
