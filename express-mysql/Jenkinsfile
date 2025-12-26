@@ -31,13 +31,13 @@ pipeline {
             }
         }
 
-        stage('Secret Scanning (TruffleHog)') {
+       stage('Secret Scanning (TruffleHog)') {
             steps {
                 script {
-                    echo "Buscando credenciales expuestas en el historial y código..."
-                    // Escaneamos el sistema de archivos actual montado en el contenedor
+                    echo "Buscando credenciales expuestas en el código..."
+                    // CAMBIO: Usamos 'filesystem' en lugar de 'github' para carpetas locales
                     sh """
-                        docker run --rm -v \$(pwd):/proj trufflesecurity/trufflehog:latest github --repo file:///proj --only-verified
+                        docker run --rm -v \$(pwd):/proj trufflesecurity/trufflehog:latest filesystem /proj --only-verified
                     """
                 }
             }
@@ -63,17 +63,20 @@ pipeline {
             steps {
                 withCredentials([string(credentialsId: "${SONAR_CRED_ID}", variable: 'SONAR_TOKEN')]) {
                     withSonarQubeEnv('sonarqube') {
-                        sh "${SCANNER_HOME}/bin/sonar-scanner \
+                        sh """
+                            ${SCANNER_HOME}/bin/sonar-scanner \
                             -Dsonar.projectKey=SimpleExpressExample:Test \
                             -Dsonar.projectName=SimpleExpressExample \
                             -Dsonar.projectVersion=0.0.${BUILD_NUMBER} \
                             -Dsonar.sources=${PROJECT_ROOT}/app.js,${PROJECT_ROOT}/config/db.config.js,${PROJECT_ROOT}/routes/developers.js \
                             -Dsonar.tests=${PROJECT_ROOT}/test \
-                            -Dsonar.login=${SONAR_TOKEN} \
-                            -Dsonar.javascript.lcov.reportPaths=${PROJECT_ROOT}/coverage/lcov.info"
+                            -Dsonar.token=${SONAR_TOKEN} \
+                            -Dsonar.javascript.lcov.reportPaths=${PROJECT_ROOT}/coverage/lcov.info
+                        """
                     }
                 }
-                timeout(time: 5, unit: 'MINUTES') {
+                // Aumentamos ligeramente el timeout y verificamos que el webhook esté configurado
+                timeout(time: 10, unit: 'MINUTES') {
                     waitForQualityGate abortPipeline: true
                 }
             }
