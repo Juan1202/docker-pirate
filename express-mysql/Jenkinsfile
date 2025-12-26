@@ -61,6 +61,7 @@ pipeline {
                 SCANNER_HOME = tool 'sonar-scanner'
             }
             steps {
+                // Usamos 'sonar.token' en lugar de 'sonar.login' (estándar de SonarQube 10.x)
                 withCredentials([string(credentialsId: "${SONAR_CRED_ID}", variable: 'SONAR_TOKEN')]) {
                     withSonarQubeEnv('sonarqube') {
                         sh """
@@ -75,8 +76,10 @@ pipeline {
                         """
                     }
                 }
-                // Aumentamos ligeramente el timeout y verificamos que el webhook esté configurado
-                timeout(time: 10, unit: 'MINUTES') {
+                
+                // Reducimos el timeout a 2 minutos; si el webhook funciona, 
+                // Sonar responde en segundos. Si no funciona, no queremos esperar 10 min.
+                timeout(time: 2, unit: 'MINUTES') {
                     waitForQualityGate abortPipeline: true
                 }
             }
