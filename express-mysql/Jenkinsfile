@@ -16,7 +16,8 @@ pipeline {
         stage('Initialize') {
             steps {
                 echo "Preparando entorno..."
-                sh "rm -f zap_report.html"
+                // Limpiamos reportes anteriores para evitar confusiones
+                sh "rm -f zap_report.html kics-report.html dependency-check-report.xml"
                 sh "chmod -R 777 ."
             }
         }
@@ -31,17 +32,48 @@ pipeline {
             }
         }
 
-       stage('Secret Scanning (TruffleHog)') {
+        stage('Secret Scanning (TruffleHog)') {
             steps {
                 script {
-                    echo "Buscando credenciales expuestas en el código..."
-                    // CAMBIO: Usamos 'filesystem' en lugar de 'github' para carpetas locales
+                    echo "Buscando secretos en el código..."
                     sh """
                         docker run --rm -v \$(pwd):/proj trufflesecurity/trufflehog:latest filesystem /proj --only-verified
                     """
                 }
             }
         }
+
+        // --- NUEVA ETAPA: IaC SCANNING ---
+        stage('IaC Security (KICS)') {
+            steps {
+                script {
+                    echo "Analizando seguridad del Dockerfile e Infraestructura..."
+                    try {
+                        sh """
+                            docker run --rm -u root \
+                            -v \$(pwd):/path \
+                            checkmarx/kics:latest scan \
+                            -p /path \
+                            -o /path \
+                            --report-formats html \
+                            --output-name kics-report \
+                            --ignore-on-exit results
+                        """
+                    } catch (Exception e) {
+                        echo "KICS encontró problemas de seguridad en la infraestructura."
+                    }
+                }
+                publishHTML([
+                    allowMissing: true,
+                    alwaysLinkToLastBuild: true,
+                    keepAll: true,
+                    reportDir: '.',
+                    reportFiles: 'kics-report.html',
+                    reportName: 'KICS IaC Report'
+                ])
+            }
+        }
+        // ---------------------------------
 
         stage('Install dependencies') {
             steps {
@@ -61,7 +93,6 @@ pipeline {
                 SCANNER_HOME = tool 'sonar-scanner'
             }
             steps {
-                // Usamos 'sonar.token' en lugar de 'sonar.login' (estándar de SonarQube 10.x)
                 withCredentials([string(credentialsId: "${SONAR_CRED_ID}", variable: 'SONAR_TOKEN')]) {
                     withSonarQubeEnv('sonarqube') {
                         sh """
@@ -76,9 +107,6 @@ pipeline {
                         """
                     }
                 }
-                
-                // Reducimos el timeout a 2 minutos; si el webhook funciona, 
-                // Sonar responde en segundos. Si no funciona, no queremos esperar 10 min.
                 timeout(time: 2, unit: 'MINUTES') {
                     waitForQualityGate abortPipeline: true
                 }
@@ -89,8 +117,6 @@ pipeline {
             steps {
                 script {
                     try {
-                        // Forzamos la salida (--out) a la raíz del workspace '.'
-                        // Esto asegura que el plugin de Jenkins encuentre el archivo XML
                         dependencyCheck additionalArguments: """
                             --scan ${PROJECT_ROOT} 
                             --format HTML 
@@ -100,13 +126,13 @@ pipeline {
                         """, 
                         odcInstallation: 'dependency-check'
                     } catch (Exception e) {
-                        echo "SCA finalizado. Revisar reportes si hay alertas."
+                        echo "SCA finalizado."
                     }
                 }
-                // Al estar en la raíz, el patrón lo encontrará sin problemas
                 dependencyCheckPublisher(pattern: 'dependency-check-report.xml', stopBuild: false)
             }
         }
+
         stage('Build docker-image') {
             steps {
                 sh "cd ${PROJECT_ROOT} && docker build -t ${REGISTRY}:${BUILD_NUMBER} ."
@@ -116,11 +142,10 @@ pipeline {
         stage('OWASP ZAP Scan (DAST)') {
             steps {
                 script {
-                    // Limpieza preventiva
-                    sh "docker rm -f zap-test-app || true" 
-            
-            // Levantar la aplicación para el escaneo
-                    sh "docker run -d --name zap-test-app -p 3001:3000 juan1202/docker-pirate-express:${BUILD_NUMBER}"
+                    // Limpieza preventiva para evitar conflicto de nombres
+                    sh "docker rm -f zap-test-app || true"
+                    
+                    sh "docker run -d --name zap-test-app -p 3001:3000 ${REGISTRY}:${BUILD_NUMBER}"
                     sleep 25 
                     
                     try {
@@ -141,6 +166,7 @@ pipeline {
                         
                         sh "find . -name 'zap_report.html' -exec cp {} . \\;"
                         sh "chmod 777 zap_report.html || true"
+                        sh "chmod 777 kics-report.html || true" // Asegurar permisos para el reporte KICS
                         
                         publishHTML([
                             allowMissing: false,
@@ -162,6 +188,14 @@ pipeline {
                     sh "docker push ${REGISTRY}:${BUILD_NUMBER}"
                 }
             }
+        }
+    }
+    
+    post {
+        always {
+            // Limpieza final de seguridad: Borramos contenedores huérfanos si algo falló
+            sh "docker rm -f zap-test-app || true"
+            echo "Pipeline finalizado. Revisa los reportes de KICS, Sonar, Dependency-Check y ZAP."
         }
     }
 }
